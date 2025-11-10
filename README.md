@@ -1,17 +1,15 @@
 # Serial Monitor
 
-A Rust-based terminal user interface (TUI) application for interacting with Arduino or other serial devices. It provides real-time monitoring of serial output, command input with history, and optional logging to a file with human-readable timestamps.
-
+Serial Monitor is a Rust-based terminal user interface (TUI) for communicating with Arduino boards and other serial devices.
+It provides a fast, modern, and ergonomic way to debug, test, and monitor serial communication directly from your terminal.
 ## Features
 
-- **Interactive TUI**: Displays serial output in a scrollable pane with color-coded messages (green for normal, red for errors containing "ERROR").
+- **Modern TUI Interface**: built with [`ratatui`](https://crates.io/crates/ratatui), featuring a split layout.
 - **Command Input**: Send commands to the serial device with cursor navigation, backspace, and command history (Up/Down arrow keys).
-- **Line Wrapping**: Long serial output lines wrap within the TUI for readability.
 - **Memory Cap**: Limits in-memory log lines to 1000 to prevent unbounded memory usage.
 - **File Logging**: Logs serial output and user commands to a file with RFC 3339 timestamps (e.g., `2025-11-10T11:06:00+00:00`).
 - **Configurable CLI**: Customize serial port, baud rate, log file path, and disable logging via command-line arguments.
 - **Input Validation**: Ensures valid serial port paths (e.g., `/dev/tty*` or `COM*`) and common baud rates (300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200).
-- **Error Handling**: Gracefully handles serial and file I/O errors, with warnings for potentially inaccessible ports.
 
 ## Requirements
 
@@ -24,7 +22,7 @@ A Rust-based terminal user interface (TUI) application for interacting with Ardu
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/serial-monitor.git
+   git clone https://github.com/gofmanaa/serial-monitor.git
    cd serial-monitor
    
 2. Build the project:
