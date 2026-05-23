@@ -1,44 +1,41 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-    fs::metadata,
-};
 use anyhow::Result;
 use chrono::Local;
 use clap::Parser;
 use crossterm::{
+    cursor::{Hide, Show},
     event::{self, Event, KeyCode},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode},
-    cursor::{Hide, Show},
 };
 use ratatui::{
-    backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Terminal,
+};
+use std::{
+    fs::metadata,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    sync::{mpsc, Mutex},
-    time,
     fs::OpenOptions,
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::{Mutex, mpsc},
+    time,
 };
-use tokio_serial::{SerialPortBuilderExt, DataBits, FlowControl, Parity, StopBits};
+use tokio_serial::{DataBits, FlowControl, Parity, SerialPortBuilderExt, StopBits};
 
 const VALID_BAUD_RATES: &[u32] = &[300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200];
 
 fn validate_baud_rate(baud: &str) -> Result<u32, String> {
-    let baud: u32 = baud.parse().map_err(|_| {
-        format!("Baud rate must be a number, one of {:?}", VALID_BAUD_RATES)
-    })?;
+    let baud: u32 = baud
+        .parse()
+        .map_err(|_| format!("Baud rate must be a number, one of {:?}", VALID_BAUD_RATES))?;
     if VALID_BAUD_RATES.contains(&baud) {
         Ok(baud)
     } else {
         Err(format!(
-            "Invalid baud rate: {}. Must be one of {:?}", 
+            "Invalid baud rate: {}. Must be one of {:?}",
             baud, VALID_BAUD_RATES
         ))
     }
@@ -46,13 +43,12 @@ fn validate_baud_rate(baud: &str) -> Result<u32, String> {
 
 fn validate_port(port: &str) -> Result<String, String> {
     // Check if port matches Unix-like (/dev/tty*) or Windows (COM*) patterns
-    let is_valid_pattern = 
-        port.starts_with("/dev/tty") || // Unix-like systems (Linux/macOS)
+    let is_valid_pattern = port.starts_with("/dev/tty") || // Unix-like systems (Linux/macOS)
         port.to_uppercase().starts_with("COM"); // Windows (e.g., COM1, COM2)
-    
+
     if !is_valid_pattern {
         return Err(format!(
-            "Invalid port: {}. Must start with '/dev/tty' (Unix) or 'COM' (Windows)", 
+            "Invalid port: {}. Must start with '/dev/tty' (Unix) or 'COM' (Windows)",
             port
         ));
     }
@@ -69,12 +65,12 @@ fn validate_port(port: &str) -> Result<String, String> {
 #[derive(Parser, Debug)]
 #[command(about = "Serial monitor for Arduino communication")]
 struct Args {
-    /// Serial port name (e.g., /dev/ttyUSB0 or COM1)
+    /// Serial port name (e.g., /dev/ttyUSB0 or /dev/ttyACM0 or COM1)
     #[arg(long, default_value = "/dev/ttyUSB0", value_parser = validate_port)]
     port: String,
 
     /// Baud rate for serial communication
-    #[arg(long, default_value_t = 57600, value_parser = validate_baud_rate)]
+    #[arg(long, default_value_t = 115200, value_parser = validate_baud_rate)]
     baud_rate: u32,
 
     /// Log file path
@@ -128,7 +124,7 @@ async fn main() -> Result<()> {
     let (tx_serial, mut rx_serial) = mpsc::unbounded_channel::<String>();
     let (tx_write, mut rx_write) = mpsc::unbounded_channel::<String>();
 
-    // Reader task (reads from Arduino)
+    // Reader task (reads from Device)
     tokio::spawn({
         let tx_serial = tx_serial.clone();
         async move {
@@ -175,11 +171,13 @@ async fn main() -> Result<()> {
     });
 
     // Terminal UI
-    enable_raw_mode()?;
-    let mut stdout = std::io::stdout();
-    execute!(stdout, crossterm::terminal::EnterAlternateScreen, Hide)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    //enable_raw_mode()?;
+    // let mut stdout = std::io::stdout();
+    // execute!(stdout, crossterm::terminal::EnterAlternateScreen, Hide)?;
+    // let backend = CrosstermBackend::new(stdout);
+    // let mut terminal = Terminal::new(backend)?;
+
+    let mut terminal = ratatui::init();
 
     let mut input = String::new();
     let mut cursor_pos = 0;
@@ -212,7 +210,11 @@ async fn main() -> Result<()> {
             let visible = output_lines[start..].to_vec();
 
             let monitor = Paragraph::new(visible)
-                .block(Block::default().title("Arduino Monitor").borders(Borders::ALL))
+                .block(
+                    Block::default()
+                        .title("Serial Monitor")
+                        .borders(Borders::ALL),
+                )
                 .wrap(Wrap { trim: false });
             f.render_widget(monitor, layout[0]);
 
@@ -241,12 +243,12 @@ async fn main() -> Result<()> {
 
         // Process serial lines
         while let Ok(line) = rx_serial.try_recv() {
-            let style = if line.contains("ERROR") {
+            let style = if line.to_uppercase().contains("ERROR") {
                 Style::default().fg(Color::Red)
             } else {
                 Style::default().fg(Color::Green)
             };
-            let line_text = format!("[Arduino] {}", line);
+            let line_text = format!("[Device] {}", line);
             output_lines.push(Line::from(Span::styled(line_text.clone(), style)));
             // Log to file (if enabled) and enforce memory cap
             if let Some(log_file) = &log_file {
@@ -261,98 +263,102 @@ async fn main() -> Result<()> {
         }
 
         // Handle user input
-        if event::poll(Duration::from_millis(10))? 
-            && let Event::Key(key) = event::read()? 
+        if event::poll(Duration::from_millis(10))?
+            && let Event::Key(key) = event::read()?
         {
-                match key.code {
-                    KeyCode::Char(c) => {
-                        input.insert(cursor_pos, c);
+            match key.code {
+                KeyCode::Char(c) => {
+                    input.insert(cursor_pos, c);
+                    cursor_pos += 1;
+                }
+                KeyCode::Backspace => {
+                    if cursor_pos > 0 {
+                        input.remove(cursor_pos - 1);
+                        cursor_pos -= 1;
+                    }
+                }
+                KeyCode::Left => {
+                    cursor_pos = cursor_pos.saturating_sub(1);
+                }
+                KeyCode::Right => {
+                    if cursor_pos < input.len() {
                         cursor_pos += 1;
                     }
-                    KeyCode::Backspace => {
-                        if cursor_pos > 0 {
-                            input.remove(cursor_pos - 1);
-                            cursor_pos -= 1;
+                }
+                KeyCode::Enter => {
+                    if !input.trim().is_empty() {
+                        history.push(input.clone());
+                        let _ = tx_write.send(input.clone());
+                        let line_text = format!("> {}", input);
+                        output_lines.push(Line::from(Span::styled(
+                            line_text.clone(),
+                            Style::default().fg(Color::Yellow),
+                        )));
+                        // Log to file (if enabled) and enforce memory cap
+                        if let Some(log_file) = &log_file {
+                            log_to_file(log_file, &line_text).await;
                         }
-                    }
-                    KeyCode::Left => {
-                        cursor_pos = cursor_pos.saturating_sub(1);
-                    }
-                    KeyCode::Right => {
-                        if cursor_pos < input.len() {
-                            cursor_pos += 1;
-                        }
-                    }
-                    KeyCode::Enter => {
-                        if !input.trim().is_empty() {
-                            history.push(input.clone());
-                            let _ = tx_write.send(input.clone());
-                            let line_text = format!("> {}", input);
-                            output_lines.push(Line::from(Span::styled(
-                                line_text.clone(),
-                                Style::default().fg(Color::Yellow),
-                            )));
-                            // Log to file (if enabled) and enforce memory cap
-                            if let Some(log_file) = &log_file {
-                                log_to_file(log_file, &line_text).await;
+                        if output_lines.len() > MAX_LINES {
+                            output_lines.remove(0);
+                            if scroll_offset > 0 {
+                                scroll_offset = scroll_offset.saturating_sub(1);
                             }
-                            if output_lines.len() > MAX_LINES {
-                                output_lines.remove(0);
-                                if scroll_offset > 0 {
-                                    scroll_offset = scroll_offset.saturating_sub(1);
-                                }
-                            }
-                            input.clear();
-                            cursor_pos = 0;
-                            history_index = None;
                         }
+                        input.clear();
+                        cursor_pos = 0;
+                        history_index = None;
                     }
-                    KeyCode::Up => {
-                        if let Some(new_idx) = history_index.map(|i| i.saturating_sub(1)).or_else(|| {
+                }
+                KeyCode::Up => {
+                    if let Some(new_idx) =
+                        history_index.map(|i| i.saturating_sub(1)).or_else(|| {
                             if !history.is_empty() {
                                 Some(history.len() - 1)
                             } else {
                                 None
                             }
-                        }) {
-                            input = history[new_idx].clone();
-                            cursor_pos = input.len();
-                            history_index = Some(new_idx);
-                        }
+                        })
+                    {
+                        input = history[new_idx].clone();
+                        cursor_pos = input.len();
+                        history_index = Some(new_idx);
                     }
-                    KeyCode::Down => {
-                        if let Some(i) = history_index {
-                            if i + 1 < history.len() {
-                                input = history[i + 1].clone();
-                                cursor_pos = input.len();
-                                history_index = Some(i + 1);
-                            } else {
-                                input.clear();
-                                cursor_pos = 0;
-                                history_index = None;
-                            }
-                        }
-                    }
-                    KeyCode::PageUp => {
-                        scroll_offset = (scroll_offset + 3).min(output_lines.len().saturating_sub(1));
-                    }
-                    KeyCode::PageDown => {
-                        scroll_offset = scroll_offset.saturating_sub(3);
-                    }
-                    KeyCode::Esc => break,
-                    _ => {}
                 }
-        
+                KeyCode::Down => {
+                    if let Some(i) = history_index {
+                        if i + 1 < history.len() {
+                            input = history[i + 1].clone();
+                            cursor_pos = input.len();
+                            history_index = Some(i + 1);
+                        } else {
+                            input.clear();
+                            cursor_pos = 0;
+                            history_index = None;
+                        }
+                    }
+                }
+                KeyCode::PageUp => {
+                    scroll_offset = (scroll_offset + 3).min(output_lines.len().saturating_sub(1));
+                }
+                KeyCode::PageDown => {
+                    scroll_offset = scroll_offset.saturating_sub(3);
+                }
+                KeyCode::Esc => break,
+                _ => {}
+            }
         }
 
-        time::sleep(Duration::from_millis(10)).await;
+        //time::sleep(Duration::from_millis(10)).await;
     }
 
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        crossterm::terminal::LeaveAlternateScreen,
-        Show
-    )?;
+    // disable_raw_mode()?;
+    // execute!(
+    //     terminal.backend_mut(),
+    //     crossterm::terminal::LeaveAlternateScreen,
+    //     Show
+    // )?;
+
+    ratatui::restore();
+
     Ok(())
 }
